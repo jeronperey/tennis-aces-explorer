@@ -3,7 +3,7 @@
 // selecting or hovering a player in one graphic highlights the same player in the others.
 (function () {
   const INK = "#1f2328", MUTED = "#5b626b", GRID = "#d9dde1", ACCENT = "#6d28d9";
-  const TIER_COLORS = { "Top 10": "#0b3d75", "11-50": "#5b8bc0", "51+": "#b4c6dc" };
+  const TIER_COLORS = { "Top 10": "#08306b", "11-50": "#4f86c6", "51+": "#a9c1de" };
   const TIER_LABEL = { "Top 10": "Reached top 10", "11-50": "Best rank 11–50", "51+": "Best rank 51+" };
   const TIER_ORDER = ["Top 10", "11-50", "51+"];
   const SURF_COLORS = { Hard: "#1b3f8b", Clay: "#8b1e1e", Grass: "#2e8b3e" };
@@ -16,25 +16,32 @@
     win:   { label: "Match win rate",    axis: "Match win rate (%)" },
   };
   const f1 = d3.format(".1f"), f0 = d3.format(",");
+  const REDUCE = !!(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches);
   const byId = new Map(DATA.players.map(p => [p.id, p]));
   const byName = new Map(DATA.players.map(p => [p.name, p]));
   const lastName = n => n.split(" ").slice(-1)[0];
 
   const val = (p, key, surface) => surface === "All" ? p[key] : (p.surf[surface] ? p.surf[surface][key] : null);
   const matchesOn = (p, surface) => surface === "All" ? p.m : (p.surf[surface] ? p.surf[surface].m : 0);
+  const baseMin = surface => surface === "All" ? DATA.meta.minMatches : DATA.meta.minMatchesSurface;
+  const minFor = st => Math.max(st.minMatches != null ? st.minMatches : 0, baseMin(st.surface));
+  // the players currently on the chart: have both measures, and enough matches (the "minimum matches" slider)
+  const viewRows = (st, yKey) => DATA.players.map(p => ({ p, x: val(p, st.measure, st.surface), y: val(p, yKey || "win", st.surface), n: matchesOn(p, st.surface) }))
+    .filter(d => d.x != null && d.y != null && d.n >= minFor(st));
   const pearson = (a, b) => {
     const n = a.length, ma = d3.mean(a), mb = d3.mean(b);
     let sab = 0, saa = 0, sbb = 0;
     for (let i = 0; i < n; i++) { sab += (a[i] - ma) * (b[i] - mb); saa += (a[i] - ma) ** 2; sbb += (b[i] - mb) ** 2; }
     return sab / Math.sqrt(saa * sbb);
   };
+  const strength = r => Math.abs(r) < 0.2 ? "barely" : Math.abs(r) < 0.4 ? "weakly" : Math.abs(r) < 0.6 ? "moderately" : "strongly";
   const topBy = (key, k) => DATA.players.slice().sort((a, b) => b[key] - a[key]).slice(0, k).map(p => p.id);
   const GROUPS = { servers: new Set(topBy("ace", 8)), winners: new Set(topBy("win", 8)) };
 
   // ---------- store (tiny publish/subscribe so linked graphics stay in sync) ----------
   function createStore(init) {
     const state = Object.assign({ measure: "ace", surface: "All", color: true, trend: true, labels: true,
-      selected: null, hover: null, brush: null, highlight: "none" }, init || {});
+      selected: null, hover: null, brush: null, highlight: "none", minMatches: null }, init || {});
     const subs = [];
     return { get: () => state, on: fn => subs.push(fn),
       set(patch) { const prev = Object.assign({}, state); Object.assign(state, patch); subs.forEach(fn => fn(state, patch, prev)); } };
@@ -44,14 +51,14 @@
   let tipEl = null;
   function tip() { if (!tipEl) { tipEl = d3.select("body").append("div").attr("id", "tooltip"); } return tipEl; }
   function showTip(evt, html) {
-    tip().html(html).style("opacity", 1).style("left", Math.min(evt.clientX + 14, innerWidth - 280) + "px").style("top", evt.clientY + 14 + "px");
+    tip().html(html).style("opacity", 1).style("left", Math.min(evt.clientX + 14, innerWidth - 290) + "px").style("top", evt.clientY + 14 + "px");
   }
   const hideTip = () => tip().style("opacity", 0);
 
   // ======================================================================== scatterplot
   function Scatter(host, store, opts) {
     opts = opts || {};
-    const W = opts.width || 760, H = opts.height || 520, m = { l: 66, r: 28, t: 48, b: 62 };
+    const W = opts.width || 760, H = opts.height || 520, m = { l: 70, r: 92, t: 50, b: 64 };
     const yKey = opts.y || "win";
     const svg = d3.select(host).append("svg").attr("class", "chart").attr("viewBox", [0, 0, W, H])
       .attr("role", "img").attr("aria-label", "Scatterplot: one dot per ATP player, 2015 to 2024");
@@ -60,13 +67,13 @@
       gy = svg.append("g").attr("transform", `translate(${m.l},0)`).attr("class", "axis");
     const xTitle = svg.append("text").attr("class", "axis-title").attr("x", (m.l + W - m.r) / 2).attr("y", H - 14).attr("text-anchor", "middle");
     svg.append("text").attr("class", "axis-title").attr("transform", `translate(16,${(m.t + H - m.b) / 2}) rotate(-90)`).attr("text-anchor", "middle").text(MEASURES[yKey].axis);
-    const ref = svg.append("g"), trendG = svg.append("g");
+    const ref = svg.append("g"), notes = svg.append("g").attr("pointer-events", "none");
     const brushG = svg.append("g").attr("class", "brush");
-    const dotsG = svg.append("g"), labG = svg.append("g").attr("pointer-events", "none");
-    const legend = svg.append("g").attr("transform", `translate(${m.l},20)`);
-    const readout = svg.append("text").attr("class", "readout").attr("x", W - m.r).attr("y", 20).attr("text-anchor", "end");
+    const dotsG = svg.append("g"), trendG = svg.append("g").attr("pointer-events", "none"), labG = svg.append("g").attr("pointer-events", "none");
+    const legend = svg.append("g").attr("transform", `translate(${m.l},22)`);
+    const readout = svg.append("text").attr("class", "readout").attr("x", W - m.r).attr("y", 22).attr("text-anchor", "end");
 
-    let rows = [], brushing = false;
+    let rows = [];
     const brush = d3.brush().extent([[m.l, m.t], [W - m.r, H - m.b]]).on("brush end", e => {
       if (!e.sourceEvent) return;                           // ignore programmatic moves
       if (!e.selection) { if (e.type === "end") store.set({ brush: null }); return; }
@@ -75,26 +82,34 @@
     });
     brushG.call(brush);
     if (opts.brush === false) brushG.style("display", "none");
-
     const inBrush = (d, b) => d.x >= b.x0 && d.x <= b.x1 && d.y >= b.y0 && d.y <= b.y1;
 
     function render(animate) {
-      const st = store.get(), dur = animate ? 650 : 0;
-      rows = DATA.players.map(p => ({ p, x: val(p, st.measure, st.surface), y: val(p, yKey, st.surface) })).filter(d => d.x != null && d.y != null);
-      const xs = rows.map(d => d.x), ys = rows.map(d => d.y);
-      x.domain([Math.floor(d3.min(xs) - 1), Math.ceil(d3.max(xs) + 1)]).nice();
-      y.domain([Math.floor(d3.min(ys) / 5 - 0.2) * 5, Math.ceil(d3.max(ys) / 5 + 0.2) * 5]);
+      const st = store.get(), dur = animate && !REDUCE ? 650 : 0;
+      rows = viewRows(st, yKey);
+      if (rows.length) {
+        const xs = rows.map(d => d.x), ys = rows.map(d => d.y);
+        x.domain([Math.floor(d3.min(xs) - 1), Math.ceil(d3.max(xs) + 1)]).nice();
+        y.domain([Math.floor(d3.min(ys) / 5 - 0.2) * 5, Math.ceil(d3.max(ys) / 5 + 0.2) * 5]);
+      }
       gx.transition().duration(dur).call(d3.axisBottom(x).ticks(7).tickFormat(d => d + "%"));
       gy.transition().duration(dur).call(d3.axisLeft(y).ticks(6).tickFormat(d => d + "%"));
       gGrid.selectAll("line").data(y.ticks(6)).join("line").attr("class", "gridline").attr("x1", m.l).attr("x2", W - m.r)
         .transition().duration(dur).attr("y1", d => y(d)).attr("y2", d => y(d));
       xTitle.text(MEASURES[st.measure].axis);
-      // 50% reference line (a player who wins half their matches)
       ref.selectAll("*").remove();
       if (yKey === "win" && y(50) >= m.t && y(50) <= H - m.b) {
-        ref.append("line").attr("class", "ref").attr("x1", m.l).attr("x2", W - m.r).attr("y1", y(50)).attr("y2", y(50));
+        ref.append("line").attr("class", "ref").attr("x1", m.l).attr("x2", W - m.r + 6).attr("y1", y(50)).attr("y2", y(50));
+        const lab = ref.append("text").attr("class", "small ref-label").attr("x", W - m.r + 10).attr("y", y(50) - 2);
+        lab.append("tspan").attr("x", W - m.r + 10).text("50% line:"); lab.append("tspan").attr("x", W - m.r + 10).attr("dy", 15).text("wins half");
       }
-      // dots
+      // corner notes: the two "surprising" corners, named in plain words (annotation, not a paragraph)
+      notes.selectAll("*").remove();
+      if (opts.cornerNotes && st.labels && yKey === "win") {
+        const L = MEASURES[st.measure].label.toLowerCase();
+        notes.append("text").attr("class", "corner-note").attr("x", m.l + 10).attr("y", m.t + 18).text(`Low ${L}, wins a lot`);
+        notes.append("text").attr("class", "corner-note").attr("x", W - m.r - 10).attr("y", H - m.b - 10).attr("text-anchor", "end").text(`High ${L}, wins less`);
+      }
       const dots = dotsG.selectAll("circle").data(rows, d => d.p.id);
       dots.exit().remove();
       const enter = dots.enter().append("circle").attr("cx", d => x(d.x)).attr("cy", d => y(d.y)).attr("r", 0)
@@ -103,25 +118,19 @@
         .on("mouseleave", () => { store.set({ hover: null }); hideTip(); })
         .on("click", (e, d) => { e.stopPropagation(); store.set({ selected: store.get().selected === d.p.id ? null : d.p.id }); });
       enter.merge(dots).transition().duration(dur).attr("cx", d => x(d.x)).attr("cy", d => y(d.y));
-      // legend
       legend.selectAll("*").remove();
       if (st.color) {
         TIER_ORDER.forEach((t, i) => {
-          const g = legend.append("g").attr("transform", `translate(${i * 124},0)`);
-          g.append("circle").attr("r", 5.5).attr("cx", 5).attr("cy", -4).attr("fill", TIER_COLORS[t]).attr("stroke", "#fff");
-          g.append("text").attr("x", 15).attr("y", 0).attr("class", "small").text(TIER_LABEL[t]);
+          const g = legend.append("g").attr("transform", `translate(${i * 132},0)`);
+          g.append("circle").attr("r", 6).attr("cx", 6).attr("cy", -4).attr("fill", TIER_COLORS[t]).attr("stroke", "#4b5563").attr("stroke-width", 0.9);
+          g.append("text").attr("x", 17).attr("y", 0).attr("class", "small").text(TIER_LABEL[t]);
         });
       } else legend.append("text").attr("class", "small").text("Each dot is one player");
-      if (yKey === "win") {
-        const g = legend.append("g").attr("transform", `translate(${st.color ? 384 : 140},0)`);
-        g.append("line").attr("x1", 0).attr("x2", 22).attr("y1", -4).attr("y2", -4).attr("class", "ref");
-        g.append("text").attr("x", 28).attr("y", 0).attr("class", "small").text("50% = wins half");
-      }
-      renderTrend(dur);
+      renderTrend();
       restyle(dur);
     }
 
-    function renderTrend(dur) {
+    function renderTrend() {
       const st = store.get();
       trendG.selectAll("*").remove();
       const r = rows.length > 2 ? pearson(rows.map(d => d.x), rows.map(d => d.y)) : NaN;
@@ -129,26 +138,27 @@
       if (!st.trend || rows.length < 3) return;
       const xs = rows.map(d => d.x), ys = rows.map(d => d.y), mx = d3.mean(xs), my = d3.mean(ys);
       const slope = d3.sum(rows, d => (d.x - mx) * (d.y - my)) / d3.sum(rows, d => (d.x - mx) ** 2), icpt = my - slope * mx;
-      const [x0, x1] = d3.extent(xs);
-      trendG.append("line").attr("class", "trend").attr("x1", x(x0)).attr("x2", x(x1)).attr("y1", y(slope * x0 + icpt)).attr("y2", y(slope * x1 + icpt));
+      const [x0, x1] = d3.extent(xs), pts = { x1: x(x0), x2: x(x1), y1: y(slope * x0 + icpt), y2: y(slope * x1 + icpt) };
+      trendG.append("line").attr("class", "trend halo").attr("x1", pts.x1).attr("x2", pts.x2).attr("y1", pts.y1).attr("y2", pts.y2);
+      trendG.append("line").attr("class", "trend").attr("x1", pts.x1).attr("x2", pts.x2).attr("y1", pts.y1).attr("y2", pts.y2);
     }
 
     function tipHtml(d) {
       const st = store.get();
       return `<b>${d.p.name}</b><br>${MEASURES[st.measure].label}: ${f1(d.x)}%<br>${MEASURES[yKey].label}: ${f1(d.y)}%<br>` +
-             `${f0(matchesOn(d.p, st.surface))} matches · ${TIER_LABEL[d.p.tier]}`;
+             `${f0(d.n)} matches · ${TIER_LABEL[d.p.tier]}`;
     }
 
     // restyle: opacity, ring and labels depend on selection, hover, brush and highlight group
     function restyle(dur) {
-      const st = store.get(), grp = GROUPS[st.highlight];
+      const st = store.get(), grp = GROUPS[st.highlight], fade = st.selected != null && !st.brush && !grp;
       const dim = d => (grp && !grp.has(d.p.id)) || (st.brush && !inBrush(d, st.brush));
       dotsG.selectAll("circle").transition().duration(dur || 0)
-        .attr("r", d => d.p.id === st.selected ? 9 : d.p.id === st.hover ? 8 : 5.5)
-        .attr("fill", d => st.color ? TIER_COLORS[d.p.tier] : "#6b7580")
-        .attr("stroke", d => d.p.id === st.selected ? ACCENT : d.p.id === st.hover ? INK : "#fff")
-        .attr("stroke-width", d => d.p.id === st.selected ? 3 : d.p.id === st.hover ? 2 : 1)
-        .attr("opacity", d => dim(d) ? 0.15 : 0.9);
+        .attr("r", d => d.p.id === st.selected ? 9 : d.p.id === st.hover ? 8 : 5.8)
+        .attr("fill", d => d.p.id === st.selected ? ACCENT : st.color ? TIER_COLORS[d.p.tier] : "#6b7580")
+        .attr("stroke", d => d.p.id === st.selected ? "#fff" : d.p.id === st.hover ? INK : "#4b5563")
+        .attr("stroke-width", d => d.p.id === st.selected ? 2.5 : d.p.id === st.hover ? 2 : 0.9)
+        .attr("opacity", d => d.p.id === st.selected ? 1 : dim(d) ? 0.15 : fade ? 0.45 : 0.92);
       dotsG.selectAll("circle").filter(d => d.p.id === st.selected || d.p.id === st.hover).raise();
       drawLabels();
     }
@@ -163,25 +173,28 @@
       const placed = [], out = [];
       const priority = d => (d.p.id === st.selected ? 0 : d.p.id === st.hover ? 1 : 2);
       rows.filter(d => names.has(d.p.name)).sort((a, b) => priority(a) - priority(b)).forEach(d => {
-        const text = lastName(d.p.name), w = text.length * 6.6 + 6, h = 14, px = x(d.x), py = y(d.y);
-        const cands = [[8, 4, "start"], [-8, 4, "end"], [0, -11, "middle"], [0, 20, "middle"]];
+        // the selected player gets a call-out with their numbers (the takeaway lives in the chart, not only in the side panel)
+        const text = d.p.id === st.selected ? `${lastName(d.p.name)}: ${f1(d.x)}% · wins ${f1(d.y)}%` : lastName(d.p.name);
+        const w = text.length * 7.2 + 6, h = 15, px = x(d.x), py = y(d.y);
+        const cands = [[10, 4, "start"], [-10, 4, "end"], [0, -13, "middle"], [0, 23, "middle"]];
         for (const [dx, dy, anchor] of cands) {
-          const bx = anchor === "start" ? px + dx : anchor === "end" ? px + dx - w : px - w / 2, by = py + dy - 11;
+          const bx = anchor === "start" ? px + dx : anchor === "end" ? px + dx - w : px - w / 2, by = py + dy - 12;
           const ok = bx > m.l && bx + w < W - m.r + 6 && by > m.t - 8 && by + h < H - m.b + 6 && !placed.some(r => bx < r[0] + r[2] && bx + w > r[0] && by < r[1] + r[3] && by + h > r[1]);
-          if (ok || (anchor === "middle" && dy === 20)) { placed.push([bx, by, w, h]); out.push({ d, text, x: px + dx, y: py + dy, anchor }); break; }
+          if (ok || (anchor === "middle" && dy === 23)) { placed.push([bx, by, w, h]); out.push({ d, text, x: px + dx, y: py + dy, anchor }); break; }
         }
       });
       labG.selectAll("text").data(out, o => o.d.p.id).join("text").attr("class", "dot-label")
         .attr("x", o => o.x).attr("y", o => o.y).attr("text-anchor", o => o.anchor)
+        .attr("fill", o => o.d.p.id === store.get().selected ? ACCENT : INK)
         .attr("font-weight", o => o.d.p.id === store.get().selected ? 800 : 600).text(o => o.text);
     }
 
     store.on((st, patch) => {
-      if ("measure" in patch || "surface" in patch) {
+      if ("measure" in patch || "surface" in patch || "minMatches" in patch) {
         if (st.brush) { st.brush = null; brushG.call(brush.move, null); }
         render(true);
-      } else if ("color" in patch) render(false);
-      else if ("trend" in patch) renderTrend(0);
+      } else if ("color" in patch || "labels" in patch) render(false);
+      else if ("trend" in patch) renderTrend();
       else if ("brush" in patch && !st.brush) { brushG.call(brush.move, null); restyle(0); }
       else restyle(0);
     });
@@ -201,7 +214,7 @@
       .attr("aria-label", "Bar chart: share of matches won by the player who hit more aces, by size of the ace gap");
     const x = d3.scaleLinear([0, 100], [m.l, W - m.r]);
     const band = d3.scaleBand(DATA.match.all.map(d => d.bin), [m.t, H - m.b]).padding(0.28);
-    const ax = svg.append("g").attr("transform", `translate(0,${H - m.b})`).attr("class", "axis").call(d3.axisBottom(x).ticks(5).tickFormat(d => d + "%"));
+    svg.append("g").attr("transform", `translate(0,${H - m.b})`).attr("class", "axis").call(d3.axisBottom(x).ticks(5).tickFormat(d => d + "%"));
     svg.append("text").attr("class", "axis-title").attr("x", (m.l + W - m.r) / 2).attr("y", H - 14).attr("text-anchor", "middle").text("Share of matches won by the player who hit more aces (%)");
     svg.append("text").attr("class", "small bold").attr("x", 14).attr("y", m.t - 14).text("Extra aces hit");
     const rowsG = svg.append("g");
@@ -210,7 +223,7 @@
     svg.append("text").attr("class", "small").attr("x", x(50)).attr("y", m.t - 14).attr("text-anchor", "middle").text("50% = coin flip");
     let first = true;
     function update(surface) {
-      const dur = first ? 0 : 500; first = false;
+      const dur = first || REDUCE ? 0 : 500; first = false;
       const tr = sel => dur ? sel.transition().duration(dur) : sel;
       const data = DATA.match[surface === "All" ? "all" : surface], color = surface === "All" ? "#6b7580" : SURF_COLORS[surface];
       const g = rowsG.selectAll("g.row").data(data, d => d.bin).join(en => {
@@ -251,7 +264,7 @@
       svg.attr("viewBox", [0, 0, W, H]); svg.selectAll("*").remove();
       svg.append("g").attr("transform", `translate(0,${H - m.b + 6})`).attr("class", "axis").call(d3.axisBottom(x).ticks(6).tickFormat(d => d + "%"));
       svg.append("text").attr("class", "axis-title").attr("x", (m.l + W - m.r) / 2).attr("y", H - 12).attr("text-anchor", "middle").text("Share of points won (%)");
-      [["serve", "Points won on their own serve", 0], ["ret", "Points won when returning", 215]].forEach(([k, t, dx]) => {
+      [["serve", "Points won on their own serve", 0], ["ret", "Points won when returning", 250]].forEach(([k, t, dx]) => {
         svg.append("circle").attr("cx", m.l + dx).attr("cy", 18).attr("r", 6).attr("fill", COL[k]);
         svg.append("text").attr("class", "small bold").attr("x", m.l + dx + 12).attr("y", 22).text(t);
       });
@@ -290,6 +303,7 @@
     function render() {
       const id = store.get().selected; root.selectAll("*").remove();
       if (id == null) {
+        root.append("h3").attr("class", "q").text("Who is this player?");
         root.append("p").attr("class", "hint").text("Click a dot to see that player's profile. Try:");
         const row = root.append("div").attr("class", "chips");
         ["Ivo Karlovic", "Novak Djokovic", "Rafael Nadal"].forEach(n => row.append("button").attr("class", "chip").text(n).on("click", () => store.set({ selected: byName.get(n).id })));
@@ -299,21 +313,19 @@
       root.append("h3").text(p.name);
       root.append("p").attr("class", "meta").text([p.hand === "R" ? "Right-handed" : p.hand === "L" ? "Left-handed" : null, p.ht ? p.ht + " cm" : null,
         p.best ? "best ranking #" + p.best : null, f0(p.m) + " matches, " + DATA.meta.years].filter(Boolean).join(" · "));
-      // strips: where this player sits among all players
-      const W = 330, sh = 40, svg = root.append("svg").attr("class", "chart").attr("viewBox", [0, 0, W, sh * 4 + 4]);
+      const W = 330, sh = 42, svg = root.append("svg").attr("class", "chart").attr("viewBox", [0, 0, W, sh * 4 + 4]);
       [["ace", "Ace rate"], ["serve", "Serve points won"], ["ret", "Return points won"], ["win", "Match win rate"]].forEach(([k, label], i) => {
         const ext = d3.extent(DATA.players, d => d[k]), sx = d3.scaleLinear(ext, [8, W - 66]), y0 = i * sh + 4;
         const g = svg.append("g").attr("transform", `translate(0,${y0})`);
         g.append("text").attr("class", "small bold").attr("x", 8).attr("y", 12).text(label);
         const pc = pctile(k, p[k]);
         g.append("text").attr("class", "small").attr("x", W - 2).attr("y", 12).attr("text-anchor", "end").text(`${f1(p[k])}% · ` + (pc === 0 ? "lowest of all players" : `above ${pc}% of players`));
-        g.append("line").attr("x1", 8).attr("x2", W - 66).attr("y1", 28).attr("y2", 28).attr("stroke", GRID);
-        g.selectAll("line.t").data(DATA.players).join("line").attr("x1", d => sx(d[k])).attr("x2", d => sx(d[k])).attr("y1", 22).attr("y2", 34).attr("stroke", "#9aa3ad").attr("opacity", 0.4);
-        g.append("line").attr("x1", sx(d3.median(DATA.players, d => d[k]))).attr("x2", sx(d3.median(DATA.players, d => d[k]))).attr("y1", 19).attr("y2", 37).attr("stroke", INK).attr("stroke-width", 1.5);
-        g.append("circle").attr("cx", sx(p[k])).attr("cy", 28).attr("r", 6).attr("fill", ACCENT).attr("stroke", "#fff").attr("stroke-width", 1.5);
+        g.append("line").attr("x1", 8).attr("x2", W - 66).attr("y1", 30).attr("y2", 30).attr("stroke", GRID);
+        g.selectAll("line.t").data(DATA.players).join("line").attr("x1", d => sx(d[k])).attr("x2", d => sx(d[k])).attr("y1", 24).attr("y2", 36).attr("stroke", "#8a939c").attr("opacity", 0.45);
+        g.append("line").attr("x1", sx(d3.median(DATA.players, d => d[k]))).attr("x2", sx(d3.median(DATA.players, d => d[k]))).attr("y1", 21).attr("y2", 39).attr("stroke", INK).attr("stroke-width", 1.5);
+        g.append("circle").attr("cx", sx(p[k])).attr("cy", 30).attr("r", 6.5).attr("fill", ACCENT).attr("stroke", "#fff").attr("stroke-width", 1.5);
       });
       root.append("p").attr("class", "tiny").text("Grey ticks are all 246 players. The black line is the typical player.");
-      // within-match results (links back to the match-level chart)
       root.append("h4").text("In their own matches");
       [["Wins when they hit more aces than the opponent", p.wo, p.no, "#0f766e"], ["Wins when the opponent hits more aces", p.wd, p.nd, "#9a3412"]].forEach(([t, v, n, c]) => {
         const row = root.append("div").attr("class", "bar-row");
@@ -323,7 +335,6 @@
         track.append("span").attr("class", "val").text(v == null ? "–" : f1(v) + "%");
       });
       root.append("p").attr("class", "tiny").html(`They hit more aces than the opponent in ${f1(p.share)}% of matches (ties in aces left out).`);
-      // by court
       root.append("h4").text("By court");
       const t = root.append("table").attr("class", "mini");
       t.append("tr").selectAll("th").data(["", "Matches", "Win", "Ace", "Return"]).join("th").text(d => d);
@@ -338,22 +349,68 @@
     render();
   }
 
-  // ======================================================================== brush summary
+  // ======================================================================== brush summary: selected group vs everyone
   function BrushSummary(host, store) {
     const root = d3.select(host).classed("brush-summary", true);
     function render() {
       const st = store.get(); root.selectAll("*").remove();
-      if (!st.brush) { root.append("p").attr("class", "hint").text("Drag on the chart to select a group of players and compare them."); return; }
-      const b = st.brush, sel = DATA.players.filter(p => { const xv = val(p, st.measure, st.surface), yv = val(p, "win", st.surface); return xv != null && yv != null && xv >= b.x0 && xv <= b.x1 && yv >= b.y0 && yv <= b.y1; });
+      root.append("h3").attr("class", "q").text("Who is in this group?");
+      if (!st.brush) { root.append("p").attr("class", "hint").text("Drag a box on the chart to select a group of players and compare them with everyone."); return; }
+      const all = viewRows(st), b = st.brush, sel = all.filter(d => d.x >= b.x0 && d.x <= b.x1 && d.y >= b.y0 && d.y <= b.y1);
       if (!sel.length) { root.append("p").attr("class", "hint").text("No players in that box."); return; }
-      root.append("p").html(`<b>${sel.length} player${sel.length > 1 ? "s" : ""}</b> selected · average ${MEASURES[st.measure].label.toLowerCase()} <b>${f1(d3.mean(sel, p => val(p, st.measure, st.surface)))}%</b> · average win rate <b>${f1(d3.mean(sel, p => val(p, "win", st.surface)))}%</b>`);
+      root.append("p").html(`<b>${sel.length} player${sel.length > 1 ? "s" : ""}</b> selected out of ${all.length}.`);
+      // paired dots: everyone's average (hollow) vs this group's average (filled), with the gap written next to it
+      const W = 330, rh = 64, svg = root.append("svg").attr("class", "chart").attr("viewBox", [0, 0, W, rh * 2 + 8]);
+      [["x", MEASURES[st.measure].label], ["y", "Match win rate"]].forEach(([k, label], i) => {
+        const vals = all.map(d => d[k]), ext = d3.extent(vals), pad = (ext[1] - ext[0]) * 0.06, sx = d3.scaleLinear([ext[0] - pad, ext[1] + pad], [10, W - 12]);
+        const mAll = d3.mean(vals), mSel = d3.mean(sel, d => d[k]), g = svg.append("g").attr("transform", `translate(0,${i * rh + 4})`);
+        g.append("text").attr("class", "small bold").attr("x", 10).attr("y", 12).text(label);
+        g.append("text").attr("class", "small").attr("x", W - 10).attr("y", 12).attr("text-anchor", "end").text(`${mSel - mAll >= 0 ? "+" : "−"}${f1(Math.abs(mSel - mAll))} pts vs everyone`);
+        g.append("line").attr("x1", 10).attr("x2", W - 12).attr("y1", 34).attr("y2", 34).attr("stroke", GRID);
+        g.selectAll("line.t").data(vals).join("line").attr("x1", sx).attr("x2", sx).attr("y1", 29).attr("y2", 39).attr("stroke", "#8a939c").attr("opacity", 0.35);
+        g.append("line").attr("x1", sx(mAll)).attr("x2", sx(mSel)).attr("y1", 34).attr("y2", 34).attr("stroke", ACCENT).attr("stroke-width", 3);
+        g.append("circle").attr("cx", sx(mAll)).attr("cy", 34).attr("r", 6.5).attr("fill", "#fff").attr("stroke", INK).attr("stroke-width", 2);
+        g.append("circle").attr("cx", sx(mSel)).attr("cy", 34).attr("r", 6.5).attr("fill", ACCENT).attr("stroke", "#fff").attr("stroke-width", 1.5);
+        g.append("text").attr("class", "tiny").attr("x", sx(mAll)).attr("y", 52).attr("text-anchor", "middle").text(f1(mAll) + "%");
+        g.append("text").attr("class", "tiny").attr("x", sx(mSel)).attr("y", 52).attr("text-anchor", "middle").attr("fill", ACCENT).attr("font-weight", 700).text(f1(mSel) + "%");
+      });
+      root.append("p").attr("class", "tiny").html("Hollow dot: everyone shown. Purple dot: this group.");
       const list = root.append("ul").attr("class", "plist");
-      sel.sort((a, c) => val(c, "win", st.surface) - val(a, "win", st.surface)).slice(0, 6).forEach(p =>
-        list.append("li").append("button").attr("class", "link").text(`${p.name} (${f1(val(p, "win", st.surface))}%)`).on("click", () => store.set({ selected: p.id })));
+      sel.sort((a, c) => c.y - a.y).slice(0, 6).forEach(d =>
+        list.append("li").append("button").attr("class", "link").text(`${d.p.name} (${f1(d.y)}%)`).on("click", () => store.set({ selected: d.p.id })));
       if (sel.length > 6) root.append("p").attr("class", "tiny").text(`and ${sel.length - 6} more`);
     }
-    store.on((st, patch) => { if ("brush" in patch || "measure" in patch || "surface" in patch) render(); });
+    store.on((st, patch) => { if ("brush" in patch || "measure" in patch || "surface" in patch || "minMatches" in patch) render(); });
     render();
+  }
+
+  // ======================================================================== insight: the takeaway for the current view
+  function Insight(qHost, tHost, store) {
+    const q = d3.select(qHost), t = d3.select(tHost);
+    function render() {
+      const st = store.get(), rows = viewRows(st), L = MEASURES[st.measure].label.toLowerCase();
+      q.text(`Does ${L} go with winning${st.surface === "All" ? "" : " on " + st.surface.toLowerCase() + " courts"}?`);
+      if (rows.length < 12) { t.html("Too few players meet the minimum number of matches. Lower the minimum to see more."); return; }
+      const r = pearson(rows.map(d => d.x), rows.map(d => d.y)), k = Math.min(5, Math.floor(rows.length / 4));
+      const sorted = rows.slice().sort((a, b) => b.x - a.x), top = d3.mean(sorted.slice(0, k), d => d.y), bot = d3.mean(sorted.slice(-k), d => d.y);
+      t.html(`${MEASURES[st.measure].label} goes <b>${r < -0.2 ? "against" : strength(r)}</b> with winning (<i>r</i> = ${r.toFixed(2)}). ` +
+        `The ${k} players with the highest ${L} win <b>${f1(top)}%</b> of their matches on average, and the ${k} with the lowest win <b>${f1(bot)}%</b>.`);
+    }
+    store.on((st, patch) => { if ("measure" in patch || "surface" in patch || "minMatches" in patch) render(); });
+    render();
+  }
+
+  // ======================================================================== guided starting views
+  function Presets(host, store) {
+    const root = d3.select(host).classed("presets", true);
+    root.append("span").attr("class", "ctl-label").text("Start here");
+    const items = [["Do big servers win?", { measure: "ace", surface: "All", highlight: "servers", brush: null }],
+                   ["Who wins without aces?", { measure: "ace", surface: "All", highlight: "winners", brush: null }],
+                   ["What does go with winning?", { measure: "serve", surface: "All", highlight: "none", brush: null }],
+                   ["Is grass different?", { measure: "ace", surface: "Grass", highlight: "none", brush: null }]];
+    const btns = items.map(([text, patch]) => root.append("button").attr("type", "button").attr("class", "chip").text(text).on("click", () => { store.set(patch); sync(); }));
+    const sync = () => { const st = store.get(); btns.forEach((b, i) => { const p = items[i][1]; b.classed("on", Object.keys(p).every(k => k === "brush" || st[k] === p[k])); }); };
+    store.on(sync); sync();
   }
 
   // ======================================================================== controls
@@ -371,24 +428,33 @@
     const root = d3.select(host).classed("controls", true), syncs = [];
     if (opts.measure !== false) syncs.push(segmented(root.node(), "Show on the x-axis", Object.keys(MEASURES).filter(k => k !== "win").map(k => [k, MEASURES[k].label]), () => store.get().measure, v => store.set({ measure: v })));
     if (opts.surface !== false) syncs.push(segmented(root.node(), "Court", [["All", "All"], ["Hard", "Hard"], ["Clay", "Clay"], ["Grass", "Grass"]], () => store.get().surface, v => store.set({ surface: v })));
+    if (opts.slider) {
+      const wrap = root.append("div").attr("class", "ctl");
+      const lab = wrap.append("span").attr("class", "ctl-label");
+      const input = wrap.append("input").attr("type", "range").attr("class", "slider").attr("min", 30).attr("max", 300).attr("step", 10).attr("aria-label", "Minimum matches per player")
+        .on("input", function () { store.set({ minMatches: +this.value }); });
+      const syncSlider = () => { const v = minFor(store.get()); input.property("value", v); lab.text(`Minimum matches: ${v}`); };
+      store.on((st, patch) => { if ("minMatches" in patch || "surface" in patch) syncSlider(); });
+      syncSlider(); syncs.push(syncSlider);
+    }
     if (opts.toggles !== false) {
       const row = root.append("div").attr("class", "ctl toggles");
       [["color", "Color by best ranking"], ["trend", "Trend line"], ["labels", "Label notable players"]].forEach(([k, t]) => {
         const lab = row.append("label").attr("class", "chk");
-        const input = lab.append("input").attr("type", "checkbox").property("checked", store.get()[k]).on("change", function () { store.set({ [k]: this.checked }); });
+        lab.append("input").attr("type", "checkbox").property("checked", store.get()[k]).on("change", function () { store.set({ [k]: this.checked }); });
         lab.append("span").text(t);
       });
       const dl = root.append("datalist").attr("id", "names-" + (opts.id || "x"));
       dl.selectAll("option").data(DATA.players.map(p => p.name).sort()).join("option").attr("value", d => d);
-      const search = row.append("input").attr("type", "search").attr("class", "search").attr("placeholder", "Find a player…").attr("list", "names-" + (opts.id || "x"))
+      row.append("input").attr("type", "search").attr("class", "search").attr("placeholder", "Find a player…").attr("aria-label", "Find a player").attr("list", "names-" + (opts.id || "x"))
         .on("change", function () { const p = byName.get(this.value); if (p) { store.set({ selected: p.id }); this.value = ""; } });
       row.append("button").attr("class", "chip reset").attr("type", "button").text("Reset").on("click", () => {
-        store.set({ measure: "ace", surface: "All", color: true, trend: true, labels: true, selected: null, brush: null, highlight: "none" });
+        store.set({ measure: "ace", surface: "All", color: true, trend: true, labels: true, selected: null, brush: null, highlight: "none", minMatches: null });
         root.selectAll("input[type=checkbox]").property("checked", true); syncs.forEach(f => f());
       });
     }
     return { sync: () => syncs.forEach(f => f()) };
   }
 
-  window.Aces = { DATA, createStore, Scatter, MatchChart, Dumbbell, Profile, BrushSummary, Controls, byName, byId, MEASURES, GROUPS, SURF_COLORS };
+  window.Aces = { DATA, createStore, Scatter, MatchChart, Dumbbell, Profile, BrushSummary, Insight, Presets, Controls, viewRows, byName, byId, MEASURES, GROUPS, SURF_COLORS };
 })();

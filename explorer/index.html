@@ -10,8 +10,11 @@
   <main class="page">
     <p class="kicker">DATA 3302 · Assignment 4 · Interactive exploration</p>
     <h1>Which players win by serving big, and which win without it?</h1>
-    <p class="deck">One dot per ATP player (2015–2024, at least 50 matches). Change what the x-axis shows, filter by court, drag a box around a group, or click a dot for that player's profile.</p>
+    <p class="deck">One dot per ATP player, 2015–2024. Pick a starting view, change what the x-axis shows, filter by court, drag a box around a group, or click a dot for that player.</p>
+    <div id="presets"></div>
     <div id="controls"></div>
+    <h2 class="chart-q" id="chart-q"></h2>
+    <p class="insight" id="insight" aria-live="polite"></p>
     <div class="grid">
       <div id="chart"></div>
       <aside>
@@ -19,11 +22,12 @@
         <div id="profile"></div>
       </aside>
     </div>
-    <div class="notes">
-      <p><b>How to read it.</b> Ace rate is aces as a share of a player's service points. Serve points won and return points won are shares of points won on their own serve and on the opponent's serve. Win rate is the share of matches won. The dashed purple line is a straight-line trend and <i>r</i> shows how strongly the two measures move together (1 = perfectly, 0 = not at all).</p>
-      <p><b>Careful.</b> Only players with 50+ matches are shown, so this is a survivor sample. Courts show players with 30+ matches there. This shows association, not cause. Men's ATP tour-level matches only.</p>
+    <details class="notes">
+      <summary>About the data and the measures</summary>
+      <p><b>Measures.</b> Ace rate is aces as a share of a player's service points. Serve points won and return points won are the shares of points won on their own serve and on the opponent's serve. Win rate is the share of matches won. The purple dashed line is a straight-line trend, and <i>r</i> shows how closely the two measures move together (1 = perfectly, 0 = not at all).</p>
+      <p><b>Who is shown.</b> Players with at least 50 matches (30 on a given court), 2015–2024, men's tour-level matches only; use the minimum-matches slider to raise the bar. Unfinished matches and matches on other surfaces are left out. These are relationships between players, so they describe association, not cause.</p>
       <p><b>Data and code.</b> Jeff Sackmann, <i>Tennis Abstract</i> ATP match data, 2015–2024 (CC BY-NC-SA 4.0), via <a href="https://github.com/Aneeshers/tennis-sackmann-archive">github.com/Aneeshers/tennis-sackmann-archive</a>. Built with <a href="https://d3js.org">D3</a>. Source code: <a href="https://github.com/jeronperey/tennis-aces-explorer">github.com/jeronperey/tennis-aces-explorer</a>.</p>
-    </div>
+    </details>
   </main>
   <script src="../lib/d3.min.js"></script>
   <script src="../shared/data.js"></script>
