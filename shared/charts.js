@@ -209,18 +209,23 @@
   // ======================================================================== match-level bars (Assignment 2 result)
   function MatchChart(host, opts) {
     opts = opts || {};
-    const W = 760, H = 330, m = { l: 112, r: 40, t: 34, b: 56 };
+    const W = 760, H = 392, m = { l: 112, r: 40, t: 34, b: 56 }, GAP = 48, ACC = "#6d28d9";   // GAP: room under the bars for the gap bracket
     const svg = d3.select(host).append("svg").attr("class", "chart").attr("viewBox", [0, 0, W, H]).attr("role", "img")
       .attr("aria-label", "Bar chart: share of matches won by the player who hit more aces, by size of the ace gap");
-    const x = d3.scaleLinear([0, 100], [m.l, W - m.r]);
-    const band = d3.scaleBand(DATA.match.all.map(d => d.bin), [m.t, H - m.b]).padding(0.28);
+    const x = d3.scaleLinear([0, 100], [m.l, W - m.r]), barsBottom = H - m.b - GAP, by = barsBottom + GAP / 2;
+    const band = d3.scaleBand(DATA.match.all.map(d => d.bin), [m.t, barsBottom]).padding(0.28);
     svg.append("g").attr("transform", `translate(0,${H - m.b})`).attr("class", "axis").call(d3.axisBottom(x).ticks(5).tickFormat(d => d + "%"));
     svg.append("text").attr("class", "axis-title").attr("x", (m.l + W - m.r) / 2).attr("y", H - 14).attr("text-anchor", "middle").text("Share of matches won by the player who hit more aces (%)");
     svg.append("text").attr("class", "small bold").attr("x", 14).attr("y", m.t - 14).text("Extra aces hit");
     const rowsG = svg.append("g");
-    svg.append("line").attr("class", "ref halo").attr("x1", x(50)).attr("x2", x(50)).attr("y1", m.t - 8).attr("y2", H - m.b);
-    svg.append("line").attr("class", "ref").attr("x1", x(50)).attr("x2", x(50)).attr("y1", m.t - 8).attr("y2", H - m.b);
+    svg.append("line").attr("class", "ref halo").attr("x1", x(50)).attr("x2", x(50)).attr("y1", m.t - 8).attr("y2", barsBottom);
+    svg.append("line").attr("class", "ref").attr("x1", x(50)).attr("x2", x(50)).attr("y1", m.t - 8).attr("y2", barsBottom);
     svg.append("text").attr("class", "small").attr("x", x(50)).attr("y", m.t - 14).attr("text-anchor", "middle").text("50% = coin flip");
+    // the takeaway drawn in the chart: a guide from the first bar down to a bracket that spans the gap to the last bar
+    const gap = svg.append("g").attr("pointer-events", "none");
+    const guideHalo = gap.append("line").attr("class", "halo-line"), guide = gap.append("line").attr("stroke", ACC).attr("stroke-width", 2.5).attr("stroke-dasharray", "8 4");
+    const bracket = gap.append("path").attr("stroke", ACC).attr("stroke-width", 3).attr("fill", "none");
+    const gapLabel = gap.append("text").attr("font-size", 17).attr("font-weight", 800).attr("fill", ACC).attr("y", by + 6);
     let first = true;
     function update(surface) {
       const dur = first || REDUCE ? 0 : 500; first = false;
@@ -244,6 +249,12 @@
         d3.select(node).transition().duration(dur).attr("x", x(d.pct) + 10).tween("text", () => { const i = d3.interpolateNumber(from, d.pct); return t => { node.textContent = f1(i(t)) + "%"; }; });
         if (!dur) { d3.select(node).interrupt().attr("x", x(d.pct) + 10); node.textContent = f1(d.pct) + "%"; }
       });
+      const lo = data[0].pct, hi = data[data.length - 1].pct;
+      [guideHalo, guide].forEach(l => tr(l).attr("x1", x(lo)).attr("x2", x(lo)).attr("y1", m.t - 6).attr("y2", by));
+      guideHalo.attr("stroke", "#fff").attr("stroke-width", 6).attr("opacity", 0.9);
+      tr(bracket).attr("d", `M${x(lo)},${by - 7}V${by + 7}M${x(lo)},${by}H${x(hi)}M${x(hi)},${by - 7}V${by + 7}`);
+      tr(gapLabel).attr("x", x(hi) + 14);
+      gapLabel.text(`+${f1(hi - lo)} pts: ${data[data.length - 1].bin} vs ${data[0].bin}`);
     }
     update(opts.surface || "All");
     return { update };
@@ -260,7 +271,7 @@
     const x = d3.scaleLinear([20, 85], [m.l, W - m.r]);
     const medServe = d3.median(DATA.players, p => p.serve), medRet = d3.median(DATA.players, p => p.ret);
     function render() {
-      const rows = ids.map(id => byId.get(id)).sort((a, b) => b.ace - a.ace), H = m.t + m.b + rowH * rows.length;
+      const rows = ids.map(id => byId.get(id)).sort((a, b) => a.ace - b.ace), H = m.t + m.b + rowH * rows.length;
       svg.attr("viewBox", [0, 0, W, H]); svg.selectAll("*").remove();
       svg.append("g").attr("transform", `translate(0,${H - m.b + 6})`).attr("class", "axis").call(d3.axisBottom(x).ticks(6).tickFormat(d => d + "%"));
       svg.append("text").attr("class", "axis-title").attr("x", (m.l + W - m.r) / 2).attr("y", H - 12).attr("text-anchor", "middle").text("Share of points won (%)");
@@ -269,7 +280,7 @@
         svg.append("text").attr("class", "small bold").attr("x", m.l + dx + 12).attr("y", 22).text(t);
       });
       [[medServe, COL.serve], [medRet, COL.ret]].forEach(([v, c]) => svg.append("line").attr("x1", x(v)).attr("x2", x(v)).attr("y1", m.t - 6).attr("y2", H - m.b)
-        .attr("stroke", c).attr("stroke-dasharray", "2 4").attr("opacity", 0.7));
+        .attr("stroke", c).attr("stroke-dasharray", "6 4").attr("stroke-width", 2.2).attr("opacity", 0.95));
       svg.append("text").attr("class", "small").attr("x", x(medRet)).attr("y", m.t - 10).attr("text-anchor", "middle").attr("fill", COL.ret).text("typical player");
       svg.append("text").attr("class", "small").attr("x", x(medServe)).attr("y", m.t - 10).attr("text-anchor", "middle").attr("fill", COL.serve).text("typical player");
       const g = svg.selectAll("g.drow").data(rows, d => d.id).join("g").attr("class", "drow").attr("transform", (d, i) => `translate(0,${m.t + i * rowH})`)
