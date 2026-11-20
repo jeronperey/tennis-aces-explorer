@@ -405,7 +405,7 @@
       const r = pearson(rows.map(d => d.x), rows.map(d => d.y)), k = Math.min(5, Math.floor(rows.length / 4));
       const sorted = rows.slice().sort((a, b) => b.x - a.x), top = d3.mean(sorted.slice(0, k), d => d.y), bot = d3.mean(sorted.slice(-k), d => d.y);
       t.html(`${MEASURES[st.measure].label} goes <b>${r < -0.2 ? "against" : strength(r)}</b> with winning (<i>r</i> = ${r.toFixed(2)}). ` +
-        `The ${k} players with the highest ${L} win <b>${f1(top)}%</b> of their matches on average, and the ${k} with the lowest win <b>${f1(bot)}%</b>.`);
+        `The ${k} players with the highest ${L} win <b class="score">${f1(top)}%</b> of their matches on average, and the ${k} with the lowest win <b class="score">${f1(bot)}%</b>.`);
     }
     store.on((st, patch) => { if ("measure" in patch || "surface" in patch || "minMatches" in patch) render(); });
     render();
